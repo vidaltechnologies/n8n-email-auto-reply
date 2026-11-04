@@ -1,0 +1,516 @@
+{
+  "name": "Vidal Technologies - Automatic email replies",
+  "nodes": [
+    {
+      "parameters": {
+        "postProcessAction": "nothing",
+        "format": "resolved",
+        "options": {
+          "trackLastMessageId": true
+        }
+      },
+      "name": "New email received",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        16
+      ],
+      "credentials": {
+        "imap": {
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reads the incoming email and skips anything that should not get an automatic reply\nconst MY_EMAIL = 'contato@vidaltechnologies.com.br';\nconst out = [];\n\nfor (const item of $input.all()) {\n  const e = item.json;\n\n  // Sender: accepts a string (\"Name <email>\") or an object\n  const fromText = typeof e.from === 'string' ? e.from : (e.from?.text || e.from?.value?.[0]?.address || '');\n  const match = fromText.match(/<([^>]+)>/);\n  const email = (match ? match[1] : fromText).trim().toLowerCase();\n  const name = (match ? fromText.replace(/<[^>]+>/, '') : '').replace(/\"/g, '').trim();\n\n  // Never reply to ourselves, to bots or to auto-replies\n  const isBot = /no-?reply|mailer-daemon|postmaster|notifica|newsletter/i.test(email);\n  const subject = (e.subject || '').trim();\n  const isAutoReply = /^(auto|resposta autom|automatic reply|out of office|fuera de la oficina)/i.test(subject);\n  if (!email || email === MY_EMAIL || isBot || isAutoReply) continue;\n\n  // Only the FIRST contact gets an automatic reply.\n  // Replies inside a conversation (Re:, RES:, RV:...) are left for a human.\n  const isThreadReply = !!(e.inReplyTo || e.references) || /^(re|res|rv|fw|fwd|enc|aw|tr)\\s*:/i.test(subject);\n  if (isThreadReply) continue;\n\n  // Email body (strips HTML and trims very long messages)\n  let body = e.textPlain || e.text || '';\n  if (!body && (e.textHtml || e.html)) {\n    body = String(e.textHtml || e.html).replace(/<style[\\s\\S]*?<\\/style>/gi, '').replace(/<[^>]+>/g, ' ');\n  }\n  body = body.replace(/\\s+\\n/g, '\\n').replace(/[ \\t]+/g, ' ').trim().slice(0, 4000);\n\n  out.push({ json: { sender_email: email, sender_name: name, subject, message: body } });\n}\n\nreturn out;\n"
+      },
+      "name": "Read and filter email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "getAll",
+        "projectRef": "YOUR_SUPABASE_PROJECT_REF",
+        "tableId": "customers",
+        "returnAll": true,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "email",
+              "condition": "eq",
+              "keyValue": "={{ $json.sender_email }}"
+            }
+          ]
+        }
+      },
+      "name": "Find customer in Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        512,
+        16
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseOAuth2Api": {
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Matches each email against the Supabase \"customers\" table\n// Customers with welcome_sent = true get nothing (a human replies)\nconst emails = $('Read and filter email').all();\nconst rows = $input.all().map((i) => i.json).filter((r) => r && r.email);\n\nconst out = [];\nfor (const e of emails) {\n  const customer = rows.find((r) => String(r.email).toLowerCase() === e.json.sender_email);\n  if (customer && customer.welcome_sent === true) continue;\n  out.push({ json: {\n    ...e.json,\n    customer_exists: !!customer,\n    customer_id: customer ? customer.id : null,\n  } });\n}\nreturn out;\n"
+      },
+      "name": "Check customer status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are the email support assistant for Vidal Technologies, a Brazilian company that builds tailor-made technology.\n\nCOMPANY SERVICES\n1. Websites: company websites, sites for professionals and freelancers, landing pages, blogs and portfolios.\n2. Web applications: management systems, data dashboards, customer portals and members areas, scheduling, quotes and sign-up systems.\n3. Automation and AI agents: automation of repetitive tasks, AI agents, n8n workflows, document and report automation, monitoring of automations.\n\nHow we work: 1) A conversation to understand the need, 2) A proposal with scope, timeline and price, 3) Delivery with follow-up.\nContact: WhatsApp +55 41 98877-9179 and contato@vidaltechnologies.com.br. Website: vidaltechnologies.com.br\n\nRULES\n- Reply in the same language as the email (Portuguese, English or Spanish).\n- Be friendly, clear and professional, in up to 3 short paragraphs. Speak as \"we\" (the team).\n- NEVER make up prices, timelines or promises. If they ask about price or timeline, say it depends on the project and invite them to a quick chat on WhatsApp or by replying to this email.\n- Do not add a signature at the end (it is added automatically).\n- If it is spam, advertising, a newsletter or unrelated to the company, set should_reply = false.\n- Set send_catalog = true when the person asks for a quote, wants to know the services or shows interest in hiring us.\n\nReply ONLY with valid JSON in this format:\n{\"language\": \"pt\" | \"en\" | \"es\", \"category\": \"quote\" | \"question\" | \"partnership\" | \"support\" | \"spam\" | \"other\", \"should_reply\": true | false, \"send_catalog\": true | false, \"reply_text\": \"the reply text, with paragraphs separated by a blank line\"}\n\nRECEIVED EMAIL\nFrom: {{ $json.sender_name }} <{{ $json.sender_email }}>\nSubject: {{ $json.subject }}\nMessage:\n{{ $json.message }}\n",
+        "batching": {}
+      },
+      "name": "Vidal Technologies AI",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1072,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "claude-haiku-5-5"
+        },
+        "options": {
+          "maxTokensToSample": 1024
+        }
+      },
+      "name": "Claude model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.6,
+      "position": [
+        1144,
+        136
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combines the AI answer with the email data and builds the final branded email\nconst SITE = 'https://vidaltechnologies.com.br';\nconst CATALOGS = {\n  pt: SITE + '/catalogo/vidal-technologies-apresentacao.pdf',\n  en: SITE + '/catalogo/vidal-technologies-presentation-en.pdf',\n  es: SITE + '/catalogo/vidal-technologies-presentacion-es.pdf',\n};\nconst SIGNATURE = {\n  pt: { team: 'Equipe Vidal Technologies', whatsapp: 'Falar no WhatsApp', attachment: 'Segue em anexo o nosso catálogo de serviços.' },\n  en: { team: 'Vidal Technologies Team', whatsapp: 'Chat on WhatsApp', attachment: 'Our service catalog is attached.' },\n  es: { team: 'Equipo Vidal Technologies', whatsapp: 'Hablar por WhatsApp', attachment: 'Adjuntamos nuestro catálogo de servicios.' },\n};\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nconst out = [];\nconst items = $input.all();\nfor (let i = 0; i < items.length; i++) {\n  const original = $('Check customer status').all()[i].json;\n  let raw = String(items[i].json.text || items[i].json.output || '').replace(/```json|```/g, '').trim();\n  let ai;\n  try {\n    ai = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));\n  } catch (err) {\n    continue; // if the AI returns something unexpected, send nothing\n  }\n  if (!ai.should_reply || !ai.reply_text) continue; // spam, ads, etc.\n\n  const language = ['pt', 'en', 'es'].includes(ai.language) ? ai.language : 'pt';\n  const s = SIGNATURE[language];\n  const sendCatalog = ai.send_catalog === true;\n  const paragraphs = String(ai.reply_text).split(/\\n{1,}/).filter(Boolean)\n    .map((p) => `<p style=\"margin:0 0 14px\">${esc(p)}</p>`).join('');\n\n  const html = `\n<div style=\"background:#f4f4f4;padding:24px 0;font-family:Arial,Helvetica,sans-serif\">\n  <div style=\"max-width:600px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden\">\n    <div style=\"background-color:#000000;background-image:linear-gradient(#000000,#000000);padding:18px 28px\">\n      <img src=\"${SITE}/catalogo/logo-email.png\" width=\"230\" height=\"45\" alt=\"Vidal Technologies\" style=\"display:block;border:0;outline:none;text-decoration:none\">\n    </div>\n    <div style=\"padding:28px;color:#1a1a1a;font-size:15px;line-height:1.6\">\n      ${paragraphs}\n      ${sendCatalog ? `<p style=\"margin:0 0 14px\"><b>${s.attachment}</b></p>` : ''}\n      <p style=\"margin:24px 0 0\">${s.team}</p>\n      <p style=\"margin:18px 0 0\">\n        <a href=\"https://wa.me/5541988779179\" style=\"background:#FBC105;color:#000;text-decoration:none;padding:10px 20px;border-radius:999px;font-weight:bold;display:inline-block\">${s.whatsapp}</a>\n      </p>\n    </div>\n    <div style=\"background-color:#111111;background-image:linear-gradient(#111111,#111111);color:#9a9a9a;padding:16px 28px;font-size:12px\">\n      <a href=\"${SITE}\" style=\"color:#FBC105;text-decoration:none\">vidaltechnologies.com.br</a> · contato@vidaltechnologies.com.br\n    </div>\n  </div>\n</div>`;\n\n  const subject = original.subject ? (/^re:/i.test(original.subject) ? original.subject : 'Re: ' + original.subject) : 'Vidal Technologies';\n\n  out.push({ json: {\n    to: original.sender_email,\n    name: original.sender_name || original.sender_email.split('@')[0],\n    customer_exists: original.customer_exists,\n    customer_id: original.customer_id,\n    subject,\n    html,\n    language,\n    category: ai.category || 'other',\n    send_catalog: sendCatalog,\n    catalog_url: CATALOGS[language],\n  } });\n}\nreturn out;\n"
+      },
+      "name": "Build reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.send_catalog }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Send catalog?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1760,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.catalog_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "name": "Download catalog (PDF)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1984,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "Vidal Technologies <contato@vidaltechnologies.com.br>",
+        "toEmail": "={{ $('Build reply').item.json.to }}",
+        "subject": "={{ $('Build reply').item.json.subject }}",
+        "html": "={{ $('Build reply').item.json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "fileAttachments": "data"
+        }
+      },
+      "name": "Reply with catalog",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2208,
+        -80
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Build reply').item.json.customer_exists }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Customer exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2432,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "Vidal Technologies <contato@vidaltechnologies.com.br>",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Reply without catalog",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2208,
+        112
+      ],
+      "credentials": {
+        "smtp": {
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "update",
+        "projectRef": "YOUR_SUPABASE_PROJECT_REF",
+        "tableId": "customers",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Build reply').item.json.customer_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "welcome_sent",
+              "fieldValue": "true"
+            },
+            {
+              "fieldId": "welcome_sent_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            },
+            {
+              "fieldId": "language",
+              "fieldValue": "={{ $('Build reply').item.json.language }}"
+            }
+          ]
+        }
+      },
+      "name": "Mark welcome_sent",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2656,
+        -80
+      ],
+      "credentials": {
+        "supabaseOAuth2Api": {
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "projectRef": "YOUR_SUPABASE_PROJECT_REF",
+        "tableId": "customers",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ $('Build reply').item.json.to }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $('Build reply').item.json.name }}"
+            },
+            {
+              "fieldId": "welcome_sent",
+              "fieldValue": "true"
+            },
+            {
+              "fieldId": "welcome_sent_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            },
+            {
+              "fieldId": "language",
+              "fieldValue": "={{ $('Build reply').item.json.language }}"
+            }
+          ]
+        }
+      },
+      "name": "Create customer",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2656,
+        112
+      ],
+      "credentials": {
+        "supabaseOAuth2Api": {
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Vidal Technologies · Automatic email replies\n\n1. An email arrives at **contato@vidaltechnologies.com.br**\n2. The workflow skips bots, spam, auto-replies and **replies inside a conversation** (those are left for a human)\n3. It checks the Supabase **customers** table: if the person already got the welcome email (**welcome_sent = true**), nothing is sent\n4. The AI (Claude) reads the question, detects the language and writes the reply\n5. If the person wants a quote or to know the services, the **PDF catalog** is attached (PT, EN or ES)\n6. The reply goes out with the brand's look and the customer is marked **welcome_sent = true**",
+        "height": 380,
+        "width": 560,
+        "color": 7
+      },
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -112,
+        -624
+      ]
+    }
+  ],
+  "connections": {
+    "New email received": {
+      "main": [
+        [
+          {
+            "node": "Read and filter email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read and filter email": {
+      "main": [
+        [
+          {
+            "node": "Find customer in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find customer in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Check customer status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check customer status": {
+      "main": [
+        [
+          {
+            "node": "Vidal Technologies AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Vidal Technologies AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vidal Technologies AI": {
+      "main": [
+        [
+          {
+            "node": "Build reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build reply": {
+      "main": [
+        [
+          {
+            "node": "Send catalog?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send catalog?": {
+      "main": [
+        [
+          {
+            "node": "Download catalog (PDF)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reply without catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download catalog (PDF)": {
+      "main": [
+        [
+          {
+            "node": "Reply with catalog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply with catalog": {
+      "main": [
+        [
+          {
+            "node": "Customer exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply without catalog": {
+      "main": [
+        [
+          {
+            "node": "Customer exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer exists?": {
+      "main": [
+        [
+          {
+            "node": "Mark welcome_sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
