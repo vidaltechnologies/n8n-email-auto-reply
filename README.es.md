@@ -54,6 +54,8 @@ automatización con IA que Vidal Technologies entrega a sus clientes.
 4. **IA (Claude):** lee el mensaje y devuelve un JSON con el idioma, la categoría
    (presupuesto, duda, alianza, soporte, spam), si debe responder, si debe enviar el
    catálogo y el texto de la respuesta. La IA nunca inventa precios ni plazos.
+   Los correos en otros idiomas (francés, alemán...) no reciben respuesta automática
+   y quedan para un humano.
 5. **Correo con la marca:** arma la respuesta en HTML con logo, botón de WhatsApp y
    pie de página, preparada también para el modo oscuro de Gmail en el celular.
 6. **Envío:** si corresponde, descarga el catálogo en PDF en el idioma correcto y lo

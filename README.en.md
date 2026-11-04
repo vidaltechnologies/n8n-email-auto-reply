@@ -54,6 +54,8 @@ automation Vidal Technologies builds for its clients.
 4. **AI (Claude):** reads the message and returns JSON with the language, the category
    (quote, question, partnership, support, spam), whether to reply, whether to send
    the catalog and the reply text. The AI never makes up prices or timelines.
+   Emails in any other language (French, German...) get no automatic reply and are
+   left for a human.
 5. **Branded email:** builds the HTML reply with the logo, a WhatsApp button and a
    footer, also prepared for Gmail's dark mode on phones.
 6. **Send:** when needed, downloads the PDF catalog in the right language and attaches
